@@ -17,89 +17,111 @@ import soccerdata as sd
 import sqlite3
 import hashlib  # For password hashing
 
-# Custom CSS for black background, emerald green styling, iOS-like, no red
+# Set page config for centered layout and title
+st.set_page_config(
+    page_title="Soccer Prediction Bot",
+    layout="centered",
+    initial_sidebar_state="collapsed"  # Hide sidebar by default
+)
+
+# Custom CSS for iOS-like style: black background, emerald green, rounded cards, Apple fonts, hide branding
 st.markdown("""
     <style>
         /* Black background */
         [data-testid="stAppViewContainer"] {
             background-color: #000000;
         }
-        /* Text white */
-        h1, h2, h3, h4, h5, h6, label, .stTextInput > div > div > div > input {
+        /* Hide Streamlit menu, footer, and header */
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        [data-testid="collapsedControl"] {display: none !important;}
+        [data-testid="stToolbar"] {display: none !important;}
+        .stApp [data-testid="stDecoration"] {display: none;}
+        /* Apple-style fonts */
+        body, h1, h2, h3, h4, h5, h6, label, p, div, span, input {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
             color: #FFFFFF !important;
         }
         /* Emerald green buttons */
         .stButton > button {
-            background-color: #0BDA51 !important;  /* Emerald green */
+            background-color: #0BDA51 !important;
             color: #000000 !important;
-            border: none;
-            border-radius: 8px;
-            padding: 10px;
-            font-size: 16px;
+            border: none !important;
+            border-radius: 8px !important;
+            padding: 8px 16px !important;
+            font-size: 16px !important;
+            width: 100%;
         }
         .stButton > button:hover {
-            background-color: #0AA841 !important;  /* Darker emerald */
+            background-color: #0AA841 !important;
         }
-        /* Inputs with emerald borders */
+        /* Inputs with emerald borders, rounded */
         .stTextInput > div > div > div {
-            background-color: #1A1A1A;
+            background-color: #1A1A1A !important;
             border: 1px solid #0BDA51 !important;
-            border-radius: 8px;
-            color: #FFFFFF;
-            padding: 10px;
+            border-radius: 8px !important;
+            color: #FFFFFF !important;
+            padding: 8px !important;
         }
         .stTextInput > div > div > div:focus {
             border: 1px solid #0BDA51 !important;
             box-shadow: 0 0 5px #0BDA51 !important;
         }
-        /* Radio with emerald */
+        /* Number input adjustments */
+        .stNumberInput > div > div > div {
+            background-color: #1A1A1A !important;
+            border: 1px solid #0BDA51 !important;
+            border-radius: 8px !important;
+        }
+        /* Radio buttons with emerald accents, no red */
         div.row-widget.stRadio > div {
-            flex-direction: row;
-            gap: 10px;
+            flex-direction: row !important;
+            gap: 10px !important;
         }
         div.row-widget.stRadio > div > label > div {
-            background-color: #333333;
-            padding: 10px 20px;
-            border-radius: 8px;
-            color: #FFFFFF;
+            background-color: #333333 !important;
+            padding: 8px 16px !important;
+            border-radius: 8px !important;
+            color: #FFFFFF !important;
         }
         div.row-widget.stRadio > div > label[data-checked="true"] > div {
-            background-color: #0BDA51;
-            color: #000000;
+            background-color: #0BDA51 !important;
+            color: #000000 !important;
         }
-        .stRadio [role="radio"] {
-            accent-color: #0BDA51 !important;  /* No red dots */
+        input[type="radio"] {
+            accent-color: #0BDA51 !important;  /* Emerald dots */
         }
-        /* Alerts emerald (success/error) */
+        /* Alerts emerald */
         [data-testid="stAlert"] {
             background-color: #0BDA51 !important;
             color: #000000 !important;
-            border-radius: 8px;
+            border-radius: 8px !important;
         }
-        /* Center form card */
-        .centered-form {
-            max-width: 400px;
-            margin: 0 auto;
+        /* Centered card for content */
+        .centered-card {
+            max-width: 90%;
+            margin: 20px auto;
             padding: 20px;
             border-radius: 12px;
             background-color: #111111;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
-        /* Responsive for iOS feel */
+        /* Responsive for mobile */
         @media (max-width: 768px) {
-            .stColumn {
-                flex-direction: column !important;
+            .stColumn > div {
+                width: 100% !important;
+                margin-bottom: 10px !important;
             }
             div.row-widget.stRadio > div {
-                flex-direction: column;
-                gap: 5px;
+                flex-direction: column !important;
             }
-            .stButton > button, .stTextInput {
-                width: 100%;
-            }
-            h1, h2, h3 {
-                font-size: 1.5em !important;
-            }
+            h1 { font-size: 1.8em !important; }
+            h2, h3 { font-size: 1.4em !important; }
+        }
+        /* Match buttons emerald */
+        .stButton > button[kind="secondary"] {
+            background-color: #0BDA51 !important;
+            color: #000000 !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -110,7 +132,7 @@ if not API_KEY:
     st.error("API key not found. Please add API_KEY to Streamlit secrets.")
     st.stop()
 
-# SQLite for Predictions (keep but no login)
+# SQLite for Predictions
 DB_FILE = "reversebot.db"
 
 def init_db():
@@ -225,7 +247,7 @@ def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, pro
         historical = []
         home_away = []
         opponents_short = []
-        opponents_full = []  # Added for breakdown
+        opponents_full = []
         for fixture_id in fixture_ids:
             url_stats = f"https://v3.football.api-sports.io/players?fixture={fixture_id}&player={player_id}"
             response_stats = requests.get(url_stats, headers=headers).json()
@@ -402,42 +424,83 @@ def display_breakdown(data):
     for i, (val, ha, opp) in enumerate(zip(data['historical'], data['home_away'], data['opponents_full'])):
         st.write(f"Match {i+1} ({ha} vs {opp}): {val}")
 
-# Main UI (no login)
-st.markdown('<div class="centered-form">', unsafe_allow_html=True)
-st.header("Soccer Prediction Bot 5.06")
-st.subheader("Real-time FBRef data with Bayesian analysis")
+# Main UI
+with st.container(border=True):  # Rounded card
+    st.header("Soccer Prediction Bot 5.06")
+    st.subheader("Real-time FBRef data with Bayesian analysis")
 
-st.write("### Query")
+    st.write("### Query")
 
-player_name = st.text_input("Player Name", value="Kyle Walker")
+    player_name = st.text_input("Player Name", value="Kyle Walker")
 
-line = st.number_input("Line", value=46.5, step=0.5)
+    line = st.number_input("Line", value=46.5, step=0.5)
 
-col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-with col1:
-    venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
+    with col1:
+        venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
 
-with col2:
-    opponent = st.text_input("Opponent", value="Arsenal")
+    with col2:
+        opponent = st.text_input("Opponent", value="Arsenal")
 
-prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
+    prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
 
-if st.button("Submit", type="primary"):
-    # Placeholder - replace with real logic
-    # For demo, use example data with varied opponents
-    st.write(f"Processing prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}...")
-    example_data = {
-        'hybrid_mu': 50.2,
-        'metric': 'pass_attempts',
-        'line': line,
-        'historical': [45, 50, 55, 40, 60],
-        'home_away': ['Home', 'Away', 'Home', 'Away', 'Home'],
-        'opponents_short': ['ARS', 'CHE', 'LIV', 'MUN', 'TOT'],
-        'opponents_full': ['Arsenal', 'Chelsea', 'Liverpool', 'Manchester United', 'Tottenham']
-    }
-    display_prediction(example_data)
-    display_trajectory_grid(example_data)
-    display_breakdown(example_data)
-    st.success("Prediction: Over with 65% probability (based on Bayesian model).")
-st.markdown('</div>', unsafe_allow_html=True)
+    if st.button("Submit"):
+        # Real logic placeholder
+        player_id, team_name, team_id, league_name, league_id = fetch_player_info(player_name)
+        opponent_id = fetch_opponent_id(opponent, league_id)
+        if player_id and team_id and opponent_id and league_id:
+            historical, home_away, opponents_short, opponents_full = fetch_real_data(player_id, team_id, opponent_id, league_id, prop_type=prop_type.lower().replace(" ", "_"))
+            # Assume position, role, covariates, etc., for model
+            player_data = {
+                'historical': historical,
+                'type': prop_type.lower().replace(" ", "_"),
+                'position': 'CB',  # Placeholder
+                'role': 'fullback',  # Placeholder
+                'covariates': {'opp_strength': 0.5, 'home': 1 if venue == 'Home' else 0, 'xG': 1.5, 'odds_prior': 0.6},
+                'aggregate_lead': 1.0,
+                'agr_present': 0,
+                'var_present': 0,
+                'fatigue_index': 0,
+                'reversal_flag': 'stable',
+                'is_home': 1 if venue == 'Home' else 0,
+                'is_first_leg': True  # Placeholder
+            }
+            trace = run_bayesian_model(player_data)
+            xg_pred = xgboost_predict(np.arange(len(historical)).reshape(-1, 1), historical)  # Placeholder features
+            hybrid_mu = ensemble_predict(trace, xg_pred)
+            p_over = sensitivity_analysis(hybrid_mu, line)['100']['p_over']
+            # Save to DB (no user_id since no login)
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO predictions (player_name, team_name, league, metric, line, venue, opponent, role, projected_value, p_over)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (player_name, team_name, league_name, prop_type.lower().replace(" ", "_"), line, venue, opponent, player_data['role'], hybrid_mu, p_over))
+            conn.commit()
+            conn.close()
+            data = {
+                'hybrid_mu': hybrid_mu,
+                'metric': prop_type.lower().replace(" ", "_"),
+                'line': line,
+                'historical': historical,
+                'home_away': home_away,
+                'opponents_short': opponents_short,
+                'opponents_full': opponents_full
+            }
+        else:
+            st.error("Failed to fetch data. Using placeholder.")
+            data = {
+                'hybrid_mu': 50.2,
+                'metric': prop_type.lower().replace(" ", "_"),
+                'line': line,
+                'historical': [45, 50, 55, 40, 60],
+                'home_away': ['Home', 'Away', 'Home', 'Away', 'Home'],
+                'opponents_short': ['ARS', 'CHE', 'LIV', 'MUN', 'TOT'],
+                'opponents_full': ['Arsenal', 'Chelsea', 'Liverpool', 'Manchester United', 'Tottenham']
+            }
+        st.write(f"Processing prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}...")
+        display_prediction(data)
+        display_trajectory_grid(data)
+        display_breakdown(data)
+        st.success(f"Prediction: Over with {int(data.get('p_over', 0.65)*100)}% probability (based on Bayesian model).")
