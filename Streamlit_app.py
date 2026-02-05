@@ -1,0 +1,407 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import pymc as pm
+import arviz as az
+import xgboost as xgb
+import torch
+import torch.nn as nn
+from sklearn.ensemble import StackingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import requests
+import soccerdata as sd
+import sqlite3
+import hashlib  # For password hashing
+import hashlib  # For caching key
+
+# Prompt for API key (first thing)
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = st.text_input("Enter your API-Sports Key:", type="password")
+    if st.session_state.api_key:
+        API_KEY = st.session_state.api_key
+    else:
+        st.stop()
+
+# SQLite for User Login & Predictions
+DB_FILE = "reversebot.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Users table with hashed passwords
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password_hash TEXT
+        )
+    ''')
+    # Predictions table for history
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            player_name TEXT,
+            team_name TEXT,
+            league TEXT,
+            metric TEXT,
+            line REAL,
+            venue TEXT,
+            opponent TEXT,
+            role TEXT,
+            projected_value REAL,
+            ci_low REAL,
+            ci_high REAL,
+            p_over REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# User Login/Sign Up/Reset/Logout
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_id = None
+    st.session_state.user_username = None
+
+if not st.session_state.logged_in:
+    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
+    
+    with tab1:
+        st.subheader("Login")
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
+        if st.button("Login"):
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT id FROM users WHERE username=? AND password_hash=?", (username, password_hash))
+            user = c.fetchone()
+            conn.close()
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.user_id = user[0]
+                st.session_state.user_username = username
+                st.success("Logged in!")
+            else:
+                st.error("Invalid credentials")
+    
+    with tab2:
+        st.subheader("Sign Up")
+        new_user = st.text_input("New Username", key="signup_user")
+        new_pass = st.text_input("New Password", type="password", key="signup_pass")
+        if st.button("Sign Up"):
+            if new_user and new_pass:
+                password_hash = hashlib.sha256(new_pass.encode()).hexdigest()
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                try:
+                    c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (new_user, password_hash))
+                    conn.commit()
+                    st.success("Account created! Log in now.")
+                except sqlite3.IntegrityError:
+                    st.error("Username already exists")
+                conn.close()
+            else:
+                st.error("Fill in all fields")
+    
+    with tab3:
+        st.subheader("Reset Password")
+        reset_user = st.text_input("Username for Reset", key="reset_user")
+        new_reset_pass = st.text_input("New Password", type="password", key="reset_pass")
+        if st.button("Reset"):
+            if reset_user and new_reset_pass:
+                password_hash = hashlib.sha256(new_reset_pass.encode()).hexdigest()
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, reset_user))
+                if c.rowcount > 0:
+                    st.success("Password reset! Log in with new password.")
+                else:
+                    st.error("Username not found")
+                conn.commit()
+                conn.close()
+            else:
+                st.error("Fill in all fields")
+
+    st.stop()
+
+# Logout Button (add to sidebar or top)
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.user_id = None
+    st.session_state.user_username = None
+    st.experimental_rerun()
+
+# League ID Map
+league_to_id = {
+    'ENG-Premier League': 39,
+    'ESP-La Liga': 140,
+    'ITA-Serie A': 135,
+    'GER-Bundesliga': 78,
+    'FRA-Ligue 1': 61,
+    # Add more
+}
+
+# Position Baselines (for attempted metrics)
+position_baselines = {
+    'GK': {'saves': {'mean': 3.0, 'sd': 1.0}, 'shots_attempted': {'mean': 0.1, 'sd': 0.5}},
+    'CB': {'passes_attempted': {'mean': 55.0, 'sd': 10.0}, 'shots_attempted': {'mean': 0.5, 'sd': 1.0}},
+    'CM': {'passes_attempted': {'mean': 60.0, 'sd': 15.0}, 'shots_attempted': {'mean': 1.5, 'sd': 2.0}},
+    'FWD': {'passes_attempted': {'mean': 30.0, 'sd': 10.0}, 'shots_attempted': {'mean': 3.0, 'sd': 3.0}}
+}
+
+# Role Multipliers (Expanded with all roles)
+role_multipliers = {
+    'GK': {'lead_effect': 1.5, 'shots_effect': 1.0, 'pass_adjust': 1.0, 'progressive_adjust': 0.8, 'block_adjust': 1.0},
+    'CB': {'lead_effect': 0.85, 'shots_effect': 0.9, 'pass_adjust': 1.0, 'progressive_adjust': 1.0, 'block_adjust': 1.2},
+    'CM': {'lead_effect': 1.12, 'shots_effect': 1.1, 'pass_adjust': 1.1, 'progressive_adjust': 1.2, 'block_adjust': 1.0},
+    'FWD': {'lead_effect': 1.05, 'shots_effect': 1.2, 'pass_adjust': 0.8, 'progressive_adjust': 0.9, 'block_adjust': 0.7},
+    'pivot': {'lead_effect': 1.0, 'shots_effect': 0.8, 'pass_adjust': 1.3, 'progressive_adjust': 1.1, 'block_adjust': 1.15},
+    'deep_lying_playmaker': {'lead_effect': 1.15, 'shots_effect': 1.0, 'pass_adjust': 1.4, 'progressive_adjust': 1.4, 'block_adjust': 1.0},
+    'pressure_release_valve': {'lead_effect': 1.1, 'shots_effect': 0.9, 'pass_adjust': 1.35, 'progressive_adjust': 1.25, 'block_adjust': 1.05},
+    'progressive_midfielder': {'lead_effect': 1.2, 'shots_effect': 1.15, 'pass_adjust': 1.3, 'progressive_adjust': 1.5, 'block_adjust': 0.95},
+    'box_to_box': {'lead_effect': 1.1, 'shots_effect': 1.1, 'pass_adjust': 1.2, 'progressive_adjust': 1.3, 'block_adjust': 1.1},
+    'winger': {'lead_effect': 1.05, 'shots_effect': 1.3, 'pass_adjust': 0.9, 'progressive_adjust': 1.2, 'block_adjust': 0.8},
+    'fullback': {'lead_effect': 0.9, 'shots_effect': 0.95, 'pass_adjust': 1.1, 'progressive_adjust': 1.15, 'block_adjust': 1.2},
+    'striker': {'lead_effect': 1.0, 'shots_effect': 1.4, 'pass_adjust': 0.7, 'progressive_adjust': 0.8, 'block_adjust': 0.6},
+    # Add more roles for comprehensive coverage
+}
+
+# Leg-Order Conservatism
+leg_conservatism = {
+    'away_first': 0.85,
+    'home_first': 0.95
+}
+
+# Session State
+if 'page' not in st.session_state:
+    st.session_state.page = 'search'
+if 'player_data' not in st.session_state:
+    st.session_state.player_data = None
+
+# Data Fetch Functions
+def fetch_player_info(player_name, season=2025):
+    try:
+        url = f"https://v3.football.api-sports.io/players?season={season}&search={player_name}"
+        headers = {"x-apisports-key": API_KEY}
+        response = requests.get(url, headers=headers).json()
+        if not response['response']:
+            return None, None, None, None, None
+        player = response['response'][0]
+        return (player['player']['id'], player['statistics'][0]['team']['name'],
+                player['statistics'][0]['team']['id'], player['statistics'][0]['league']['name'],
+                player['statistics'][0]['league']['id'])
+
+    except Exception as e:
+        st.error(f"Player fetch failed: {e}")
+        return None, None, None, None, None
+
+def fetch_opponent_id(opponent_name, league_id, season=2025):
+    try:
+        url = f"https://v3.football.api-sports.io/teams?season={season}&league={league_id}&search={opponent_name}"
+        headers = {"x-apisports-key": API_KEY}
+        response = requests.get(url, headers=headers).json()
+        if not response['response']:
+            return None
+        return response['response'][0]['team']['id']
+    except Exception as e:
+        st.error(f"Opponent fetch failed: {e}")
+        return None
+
+def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, prop_type='passes_attempted', num_matches=10):
+    try:
+        url_h2h = f"https://v3.football.api-sports.io/fixtures/headtohead?season={season}&h2h={team_id}-{opponent_id}&last={num_matches}"
+        headers = {"x-apisports-key": API_KEY}
+        response_h2h = requests.get(url_h2h, headers=headers).json()
+        h2h_data = response_h2h['response']
+        fixture_ids = [f['fixture']['id'] for f in h2h_data]
+        
+        historical = []
+        home_away = []
+        opponents_short = []
+        for fixture_id in fixture_ids:
+            url_stats = f"https://v3.football.api-sports.io/players?fixture={fixture_id}&player={player_id}"
+            response_stats = requests.get(url_stats, headers=headers).json()
+            if response_stats['response']:
+                stats = response_stats['response'][0]['statistics'][0]
+                if prop_type == 'passes_attempted':
+                    val = stats['passes']['total'] or 0
+                elif prop_type == 'saves':
+                    val = stats['goals']['saves'] or 0
+                elif prop_type == 'shots_attempted':
+                    val = stats['shots']['total'] or 0
+                historical.append(val)
+                fixture = next(f for f in h2h_data if f['fixture']['id'] == fixture_id)
+                ha = 'Home' if fixture['teams']['home']['id'] == team_id else 'Away'
+                home_away.append(ha)
+                opp = fixture['teams']['away']['name'] if ha == 'Home' else fixture['teams']['home']['name']
+                opponents_short.append(opp[:3].upper())
+        return np.array(historical), home_away, opponents_short
+    except Exception as e:
+        st.error(f"H2H fetch failed: {e}")
+        return np.array([]), [], ['OPP'] * num_matches
+
+def fetch_heat_map(player_name):
+    # Placeholder; use tool for real
+    return 0.88, 0.65
+
+def fetch_injury_data(player_id, team_id):
+    # Placeholder; use /injuries
+    return "No injury"
+
+# Model Functions
+def impute_data(historical, n_matches=10, mean_val=0):
+    if len(historical) < n_matches:
+        imputed = np.random.poisson(mean_val, n_matches - len(historical))
+        historical = np.concatenate([historical, imputed])
+    return historical
+
+def detect_reversal_pattern(historical, first_leg_stat, lead, prop_type):
+    # Placeholder
+    return 'stable'
+
+class SimpleTransformer(nn.Module):
+    def __init__(self, input_dim=1, d_model=64, nhead=4, num_layers=2):
+        super().__init__()
+        self.embedding = nn.Linear(input_dim, d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
+        self.fc = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        x = self.embedding(x.unsqueeze(-1))
+        x = self.transformer(x)
+        return self.fc(x.mean(dim=1)).squeeze()
+
+def get_time_adjustment(time_series):
+    if len(time_series) == 0:
+        return 0.0
+    model = SimpleTransformer()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    criterion = nn.MSELoss()
+    x = torch.tensor(time_series, dtype=torch.float32).unsqueeze(0)
+    y = torch.tensor([np.mean(time_series)], dtype=torch.float32).unsqueeze(0)
+    for _ in range(10):
+        pred = model(x)
+        loss = criterion(pred, y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    return model(x).item()
+
+def xgboost_predict(features, targets):
+    if len(features) < 2:
+        return 0.0
+    X_train, X_test, y_train, y_test = train_test_split(features, targets, test_size=0.2)
+    model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=50)
+    model.fit(X_train, y_train)
+    return model.predict(X_test)[0] if len(X_test) > 0 else 0.0
+
+def run_bayesian_model(player_data):
+    historical = player_data['historical']
+    n = len(historical)
+    prop_type = player_data['type']
+    position_mean = position_baselines[player_data['position']][prop_type]['mean']
+    position_sd = position_baselines[player_data['position']][prop_type]['sd']
+    
+    with pm.Model() as model:
+        mu_base = pm.Normal('mu_base', mu=position_mean, sigma=position_sd)
+        sigma_walk = pm.HalfNormal('sigma_walk', sigma=0.5)
+        walk = pm.GaussianRandomWalk('walk', sigma=sigma_walk, shape=n)
+        mu_time = mu_base + walk
+        
+        beta_opp = pm.Normal('beta_opp', 0, 1)
+        beta_home = pm.Normal('beta_home', 0, 1)
+        beta_xg = pm.Normal('beta_xg', 0, 1)
+        mu_cov = (beta_opp * player_data['covariates']['opp_strength'] +
+                  beta_home * player_data['covariates']['home'] +
+                  beta_xg * player_data['covariates']['xG'])
+        
+        if prop_type == 'shots_attempted':
+            mu_cov *= 1.2
+        
+        alpha_odds = pm.Beta('alpha_odds', alpha=player_data['covariates']['odds_prior']*10, beta=(1-player_data['covariates']['odds_prior'])*10)
+        
+        phi = pm.Gamma('phi', alpha=2, beta=0.1)
+        psi = pm.Beta('psi', 1, 1)
+        
+        shared_effect = pm.Normal('shared_effect', 0, 1)
+        
+        beta_lead = pm.Normal('beta_lead', 0, 1)
+        mu_lead = beta_lead * player_data['aggregate_lead'] * role_multipliers[player_data['role']]['lead_effect' if prop_type != 'shots_attempted' else 'shots_effect']
+        
+        beta_agr = pm.Normal('beta_agr', 0, 0.5)
+        beta_var = pm.Normal('beta_var', 0, 0.5)
+        mu_rules = beta_agr * player_data['agr_present'] + beta_var * player_data['var_present']
+        
+        mu_fatigue = player_data['fatigue_index']
+        
+        reversal_adjust = 1.0
+        if player_data['reversal_flag'] == 'upward_reversal_likely':
+            reversal_adjust = 1.15 if prop_type != 'shots_attempted' else 1.25
+        elif player_data['reversal_flag'] == 'downward_reversal_likely':
+            reversal_adjust = 0.85
+        
+        conservatism_adjust = leg_conservatism['away_first' if player_data['is_home'] == 0 else 'home_first'] if player_data['is_first_leg'] else 1.0
+        
+        mu = pm.math.exp(mu_time[-1] + mu_cov + mu_lead + mu_rules + mu_fatigue) * alpha_odds * reversal_adjust * conservatism_adjust
+        mu = pm.Deterministic('mu', mu)
+        
+        y_obs = pm.ZeroInflatedNegativeBinomial('y_obs', psi=psi, mu=mu, alpha=phi, observed=historical)
+        
+        trace = pm.sample(500, tune=300, return_inferencedata=True, target_accept=0.9, progressbar=False)
+    
+    return trace
+
+def ensemble_predict(trace, xg_pred):
+    bay_mean = az.summary(trace, var_names=['mu'])['mean'][0]
+    return (bay_mean + xg_pred) / 2 if xg_pred else bay_mean
+
+def sensitivity_analysis(mu, line, phi_values=[50, 100, 200], n_samples=5000):
+    results = {}
+    for phi in phi_values:
+        samples = np.random.negative_binomial(phi, phi / (phi + mu), n_samples)
+        p_over = np.mean(samples > line)
+        ci_low, ci_high = np.percentile(samples > line, [2.5, 97.5])
+        results[phi] = {'p_over': p_over, 'ci': (ci_low, ci_high)}
+    return results
+
+# UI Functions
+def display_prediction(data):
+    st.subheader("Projected Value")
+    st.write(f"{data['hybrid_mu']:.1f} {data['metric'].replace('_', ' ').capitalize()}")
+    st.write(f"{ 'OVER' if data['hybrid_mu'] > data['line'] else 'UNDER' } {data['line']} vs Line" if data['line'] > 0 else "")
+
+def display_trajectory_grid(data):
+    st.subheader("Recent Match Data")
+    cols = st.columns(5)  # 2 rows of 5
+    total = 0
+    count = 0
+    selected = st.session_state.get('selected', [])
+    for i in range(len(data['historical'])):
+        val = data['historical'][i]
+        ha = data['home_away'][i]
+        opp = data['opponents_short'][i]
+        label = f"@{opp}" if ha == 'Away' else f"vs{opp}"
+        color = 'green' if val > data['line'] else 'red' if val < data['line'] else 'gray'
+        with cols[i % 5]:
+            if st.button(label, key=i, help=f"Match {i+1}: {val} {data['metric'].replace('_', ' ')} ({ha} vs {data['opponent']})"):
+                selected.append(val)
+                st.session_state.selected = selected
+        if len(selected) > count:
+            total += selected[-1]
+            count += 1
+            st.caption(f"{count} selected Total {total} Avg {total/count:.1f}")
+    
+def display_breakdown(data):
+    st.subheader("Home/Away Breakdown")
+    for i, (val, ha) in enumerate(zip(data['historical'], data['home_away'])):
+        st.write(f"Match {i+1} ({ha} vs {data['opponent']}): {val}")
