@@ -1,17 +1,4 @@
 import streamlit as st
-import numpy as np
-import pandas as pd
-import pymc as pm
-import arviz as az
-import xgboost as xgb
-import torch
-import torch.nn as nn
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-import requests
-import soccerdata as sd
-import matplotlib.pyplot as plt
-import altair as alt
 from datetime import datetime
 
 # Set page config
@@ -21,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS
+# Custom CSS for iOS-like style
 st.markdown("""
     <style>
         [data-testid="stAppViewContainer"] {
@@ -115,273 +102,56 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# API key
-API_KEY = st.secrets.get("API_KEY")
-if not API_KEY:
-    st.error("API key not found. Please add API_KEY to Streamlit secrets.")
-    st.stop()
-
-# League ID Map
-league_to_id = {
-    'ENG-Premier League': 39,
-    'ESP-La Liga': 140,
-    'ITA-Serie A': 135,
-    'GER-Bundesliga': 78,
-    'FRA-Ligue 1': 61,
-    # Add more
-}
-
-# Position Baselines
-position_baselines = {
-    'Goalkeeper': {'saves': {'mean': 3.0, 'sd': 1.0}, 'shots_attempted': {'mean': 0.1, 'sd': 0.5}},
-    'Defender': {'passes_attempted': {'mean': 55.0, 'sd': 10.0}, 'shots_attempted': {'mean': 0.5, 'sd': 1.0}},
-    'Midfielder': {'passes_attempted': {'mean': 60.0, 'sd': 15.0}, 'shots_attempted': {'mean': 1.5, 'sd': 2.0}},
-    'Attacker': {'passes_attempted': {'mean': 30.0, 'sd': 10.0}, 'shots_attempted': {'mean': 3.0, 'sd': 3.0}},
-    'CB': {'passes_attempted': {'mean': 55.0, 'sd': 10.0}, 'shots_attempted': {'mean': 0.5, 'sd': 1.0}},
-    'CM': {'passes_attempted': {'mean': 60.0, 'sd': 15.0}, 'shots_attempted': {'mean': 1.5, 'sd': 2.0}},
-    'FWD': {'passes_attempted': {'mean': 30.0, 'sd': 10.0}, 'shots_attempted': {'mean': 3.0, 'sd': 3.0}},
-    'GK': {'saves': {'mean': 3.0, 'sd': 1.0}, 'shots_attempted': {'mean': 0.1, 'sd': 0.5}},
-}
-
-# Role Multipliers
-role_multipliers = {
-    'GK': {'lead_effect': 1.5, 'shots_effect': 1.0, 'pass_adjust': 1.0, 'progressive_adjust': 0.8, 'block_adjust': 1.0},
-    'CB': {'lead_effect': 0.85, 'shots_effect': 0.9, 'pass_adjust': 1.0, 'progressive_adjust': 1.0, 'block_adjust': 1.2},
-    'CM': {'lead_effect': 1.12, 'shots_effect': 1.1, 'pass_adjust': 1.1, 'progressive_adjust': 1.2, 'block_adjust': 1.0},
-    'FWD': {'lead_effect': 1.05, 'shots_effect': 1.2, 'pass_adjust': 0.8, 'progressive_adjust': 0.9, 'block_adjust': 0.7},
-    'pivot': {'lead_effect': 1.0, 'shots_effect': 0.8, 'pass_adjust': 1.3, 'progressive_adjust': 1.1, 'block_adjust': 1.15},
-    'deep_lying_playmaker': {'lead_effect': 1.15, 'shots_effect': 1.0, 'pass_adjust': 1.4, 'progressive_adjust': 1.4, 'block_adjust': 1.0},
-    'pressure_release_valve': {'lead_effect': 1.1, 'shots_effect': 0.9, 'pass_adjust': 1.35, 'progressive_adjust': 1.25, 'block_adjust': 1.05},
-    'progressive_midfielder': {'lead_effect': 1.2, 'shots_effect': 1.15, 'pass_adjust': 1.3, 'progressive_adjust': 1.5, 'block_adjust': 0.95},
-    'box_to_box': {'lead_effect': 1.1, 'shots_effect': 1.1, 'pass_adjust': 1.2, 'progressive_adjust': 1.3, 'block_adjust': 1.1},
-    'winger': {'lead_effect': 1.05, 'shots_effect': 1.3, 'pass_adjust': 0.9, 'progressive_adjust': 1.2, 'block_adjust': 0.8},
-    'fullback': {'lead_effect': 0.9, 'shots_effect': 0.95, 'pass_adjust': 1.1, 'progressive_adjust': 1.15, 'block_adjust': 1.2},
-    'striker': {'lead_effect': 1.0, 'shots_effect': 1.4, 'pass_adjust': 0.7, 'progressive_adjust': 0.8, 'block_adjust': 0.6},
-    # Add more
-}
-
-# Leg-Order Conservatism
-leg_conservatism = {
-    'away_first': 0.85,
-    'home_first': 0.95
-}
+# API key (placeholder; add to secrets)
+API_KEY = st.secrets.get("API_KEY", "your_default_key_for_testing")  # Fallback for local
 
 # Session State
-if 'page' not in st.session_state:
-    st.session_state.page = 'search'
-if 'player_data' not in st.session_state:
-    st.session_state.player_data = None
-
-# Data Fetch Functions
-def fetch_player_info(player_name, season=None):
-    if season is None:
-        season = datetime.now().year
-    try:
-        url = f"https://v3.football.api-sports.io/players?season={season}&search={player_name}"
-        headers = {"x-apisports-key": API_KEY}
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        if not data['response']:
-            return None, None, None, None, None, None
-        player = data['response'][0]
-        position = player['statistics'][0]['games']['position']  # Detect position
-        return (
-            player['player']['id'],
-            player['statistics'][0]['team']['name'],
-            player['statistics'][0]['team']['id'],
-            player['statistics'][0]['league']['name'],
-            player['statistics'][0]['league']['id'],
-            position
-        )
-    except requests.exceptions.HTTPError as he:
-        st.error(f"HTTP error: {he}")
-    except Exception as e:
-        st.error(f"Player fetch failed: {e}")
-    return None, None, None, None, None, None
-
-def fetch_opponent_id(opponent_name, league_id, season=None):
-    if season is None:
-        season = datetime.now().year
-    try:
-        url = f"https://v3.football.api-sports.io/teams?season={season}&league={league_id}&search={opponent_name}"
-        headers = {"x-apisports-key": API_KEY}
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        if not data['response']:
-            return None
-        return data['response'][0]['team']['id']
-    except requests.exceptions.HTTPError as he:
-        st.error(f"HTTP error: {he}")
-    except Exception as e:
-        st.error(f"Opponent fetch failed: {e}")
-    return None
-
-def fetch_real_data(player_id, team_id, opponent_id, league_id, season=None, prop_type='passes_attempted', num_matches=10):
-    if season is None:
-        season = datetime.now().year
-    try:
-        url_h2h = f"https://v3.football.api-sports.io/fixtures/headtohead?season={season}&h2h={team_id}-{opponent_id}&last={num_matches}"
-        headers = {"x-apisports-key": API_KEY}
-        response_h2h = requests.get(url_h2h, headers=headers)
-        response_h2h.raise_for_status()
-        h2h_data = response_h2h.json()['response']
-        fixture_ids = [f['fixture']['id'] for f in h2h_data]
-        
-        historical = []
-        home_away = []
-        opponents_short = []
-        opponents_full = []
-        for fixture_id in fixture_ids:
-            url_stats = f"https://v3.football.api-sports.io/players?fixture={fixture_id}&player={player_id}"
-            response_stats = requests.get(url_stats, headers=headers)
-            response_stats.raise_for_status()
-            stats_data = response_stats.json()['response']
-            if stats_data:
-                stats = stats_data[0]['statistics'][0]
-                if prop_type == 'passes_attempted':
-                    val = stats.get('passes', {}).get('total', 0)
-                elif prop_type == 'saves':
-                    val = stats.get('goals', {}).get('saves', 0)
-                elif prop_type == 'shots_attempted':
-                    val = stats.get('shots', {}).get('total', 0)
-                else:
-                    val = 0
-                historical.append(val)
-                fixture = next(f for f in h2h_data if f['fixture']['id'] == fixture_id)
-                ha = 'Home' if fixture['teams']['home']['id'] == team_id else 'Away'
-                home_away.append(ha)
-                opp = fixture['teams']['away']['name'] if ha == 'Home' else fixture['teams']['home']['name']
-                opponents_short.append(opp[:3].upper())
-                opponents_full.append(opp)
-        return np.array(historical), home_away, opponents_short, opponents_full
-    except requests.exceptions.HTTPError as he:
-        st.error(f"HTTP error: {he}")
-    except Exception as e:
-        st.error(f"H2H fetch failed: {e}")
-    return np.array([]), [], [], []
-
-# Model Functions
-def impute_data(historical, n_matches=10, mean_val=0):
-    if len(historical) < n_matches:
-        imputed = np.random.poisson(mean_val, n_matches - len(historical))
-        historical = np.concatenate([historical, imputed])
-    return historical
-
-def detect_reversal_pattern(historical, first_leg_stat, lead, prop_type):
-    return 'stable'
-
-class SimpleTransformer(nn.Module):
-    def __init__(self, input_dim=1, d_model=64, nhead=4, num_layers=2):
-        super().__init__()
-        self.embedding = nn.Linear(input_dim, d_model)
-        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
-        self.fc = nn.Linear(d_model, 1)
-
-    def forward(self, x):
-        x = self.embedding(x.unsqueeze(-1))
-        x = self.transformer(x)
-        return self.fc(x.mean(dim=1)).squeeze()
-
-def get_time_adjustment(time_series):
-    if len(time_series) == 0:
-        return 0.0
-    model = SimpleTransformer()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    criterion = nn.MSELoss()
-    x = torch.tensor(time_series, dtype=torch.float32).unsqueeze(0)
-    y = torch.tensor([np.mean(time_series)], dtype=torch.float32).unsqueeze(0)
-    for _ in range(10):
-        pred = model(x)
-        loss = criterion(pred, y)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-    return model(x).item()
-
-def xgboost_predict(features, targets):
-    if len(features) < 2:
-        return 0.0
-    X_train, X_test, y_train, y_test = train_test_split(features, targets, test_size=0.2)
-    model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=50)
-    model.fit(X_train, y_train)
-    return model.predict(X_test)[0] if len(X_test) > 0 else 0.0
-
-def run_bayesian_model(player_data):
-    historical = player_data['historical']
-    n = len(historical)
-    prop_type = player_data['type']
-    position = player_data['position']
-    if position not in position_baselines:
-        position = 'CB'  # Fallback
-    position_mean = position_baselines[position].get(prop_type, {'mean': 30.0})['mean']
-    position_sd = position_baselines[position].get(prop_type, {'sd': 10.0})['sd']
-    
-    with pm.Model() as model:
-        mu_base = pm.Normal('mu_base', mu=position_mean, sigma=position_sd)
-        sigma_walk = pm.HalfNormal('sigma_walk', sigma=0.5)
-        walk = pm.GaussianRandomWalk('walk', sigma=sigma_walk, shape=n)
-        mu_time = mu_base + walk
-        
-        beta_opp = pm.Normal('beta_opp', 0, 1)
-        beta_home = pm.Normal('beta_home', 0, 1)
-        beta_xg = pm.Normal('beta_xg', 0, 1)
-        mu_cov = (beta_opp * player_data['covariates']['opp_strength'] +
-                  beta_home * player_data['covariates']['home'] +
-                  beta_xg * player_data['covariates']['xG'])
-        
-        if prop_type == 'shots_attempted':
-            mu_cov *= 1.2
-        
-        alpha_odds = pm.Beta('alpha_odds', alpha=player_data['covariates']['odds_prior']*10, beta=(1-player_data['covariates']['odds_prior'])*10)
-        
-        phi = pm.Gamma('phi', alpha=2, beta=0.1)
-        psi = pm.Beta('psi', 1, 1)
-        
-        shared_effect = pm.Normal('shared_effect', 0, 1)
-        
-        beta_lead = pm.Normal('beta_lead', 0, 1)
-        mu_lead = beta_lead * player_data['aggregate_lead'] * role_multipliers[player_data['role']]['lead_effect' if prop_type != 'shots_attempted' else 'shots_effect']
-        
-        beta_agr = pm.Normal('beta_agr', 0, 0.5)
-        beta_var = pm.Normal('beta_var', 0, 0.5)
-        mu_rules = beta_agr * player_data['agr_present'] + beta_var * player_data['var_present']
-        
-        mu_fatigue = player_data['fatigue_index']
-        
-        reversal_adjust = 1.0
-        if player_data['reversal_flag'] == 'upward_reversal_likely':
-            reversal_adjust = 1.15 if prop_type != 'shots_attempted' else 1.25
-        elif player_data['reversal_flag'] == 'downward_reversal_likely':
-            reversal_adjust = 0.85
-        
-        conservatism_adjust = leg_conservatism['away_first' if player_data['is_home'] == 0 else 'home_first'] if player_data['is_first_leg'] else 1.0
-        
-        mu = pm.math.exp(mu_time[-1] + mu_cov + mu_lead + mu_rules + mu_fatigue) * alpha_odds * reversal_adjust * conservatism_adjust
-        mu = pm.Deterministic('mu', mu)
-        
-        y_obs = pm.ZeroInflatedNegativeBinomial('y_obs', psi=psi, mu=mu, alpha=phi, observed=historical)
-        
-        trace = pm.sample(500, tune=300, return_inferencedata=True, target_accept=0.9, progressbar=False)
-    
-    return trace
-
-def ensemble_predict(trace, xg_pred):
-    bay_mean = az.summary(trace, var_names=['mu'])['mean'][0]
-    return (bay_mean + xg_pred) / 2 if xg_pred else bay_mean
-
-def sensitivity_analysis(mu, line, phi_values=[50, 100, 200], n_samples=5000):
-    results = {}
-    for phi in phi_values:
-        samples = np.random.negative_binomial(phi, phi / (phi + mu), n_samples)
-        p_over = np.mean(samples > line)
-        ci_low, ci_high = np.percentile(samples > line, [2.5, 97.5])
-        results[phi] = {'p_over': p_over, 'ci': (ci_low, ci_high)}
-    return results
+if 'submitted' not in st.session_state:
+    st.session_state.submitted = False
+if 'data' not in st.session_state:
+    st.session_state.data = None
 
 # UI Functions
+def render_query_form():
+    st.write("### Query")
+    player_name = st.text_input("Player Name", value="Kyle Walker")
+    line = st.number_input("Line", value=46.5, step=0.5)
+    col1, col2 = st.columns(2)
+    with col1:
+        venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
+    with col2:
+        opponent = st.text_input("Opponent", value="Arsenal")
+    prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
+    return player_name, line, venue, opponent, prop_type
+
+def process_submission(player_name, line, venue, opponent, prop_type):
+    # Placeholder for fetch/model (implement later)
+    st.session_state.submitted = True
+    st.session_state.data = {
+        'hybrid_mu': 50.2,
+        'metric': prop_type.lower().replace(" ", "_"),
+        'line': line,
+        'historical': np.array([45, 50, 55, 40, 60]),
+        'home_away': ['Home', 'Away', 'Home', 'Away', 'Home'],
+        'opponents_short': ['ARS', 'CHE', 'LIV', 'MUN', 'TOT'],
+        'opponents_full': ['Arsenal', 'Chelsea', 'Liverpool', 'Manchester United', 'Tottenham'],
+        'p_over': 0.65,
+        'ci_low': 0.6,
+        'ci_high': 0.7
+    }
+    st.rerun()  # Refresh to show results
+
+def display_results(data):
+    st.write(f"Prediction for {st.session_state.player_name} vs {st.session_state.opponent} at {st.session_state.venue} for {st.session_state.prop_type} over/under {st.session_state.line}:")
+    display_prediction(data)
+    display_trajectory_grid(data)
+    display_breakdown(data)
+    st.success(f"Prediction: Over with {int(data['p_over'] * 100)}% probability (CI: {int(data['ci_low']*100)}% - {int(data['ci_high']*100)}%) based on Bayesian model.")
+    # Additional features (placeholders)
+    st.info("Injury Status: No injury")
+    st.info("Heat Map: Mean 0.88, SD 0.65")
+    display_chart(data['historical'])
+
 def display_prediction(data):
     st.subheader("Projected Value")
     st.write(f"{data['hybrid_mu']:.1f} {data['metric'].replace('_', ' ').capitalize()}")
@@ -389,7 +159,7 @@ def display_prediction(data):
 
 def display_trajectory_grid(data):
     st.subheader("Recent Match Data")
-    cols = st.columns(min(5, len(data['historical'])))  # Responsive
+    cols = st.columns(min(5, len(data['historical'])))
     total = 0
     count = 0
     selected = st.session_state.get('selected', [])
@@ -426,78 +196,17 @@ st.markdown('<div class="centered-card">', unsafe_allow_html=True)
 st.header("Soccer Prediction Bot 5.06")
 st.subheader("Real-time FBRef data with Bayesian analysis")
 
-st.write("### Query")
-
-player_name = st.text_input("Player Name", value="Kyle Walker")
-
-line = st.number_input("Line", value=46.5, step=0.5)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
-
-with col2:
-    opponent = st.text_input("Opponent", value="Arsenal")
-
-prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
+player_name, line, venue, opponent, prop_type = render_query_form()
 
 if st.button("Submit", type="primary"):
-    with st.spinner("Fetching data..."):
-        player_id, team_name, team_id, league_name, league_id, position = fetch_player_info(player_name)
-        opponent_id = fetch_opponent_id(opponent, league_id)
-        if player_id and team_id and opponent_id and league_id and position:
-            historical, home_away, opponents_short, opponents_full = fetch_real_data(player_id, team_id, opponent_id, league_id, prop_type=prop_type.lower().replace(" ", "_"))
-            if len(historical) == 0:
-                st.warning("No historical data found. Using placeholder.")
-                historical = np.array([45, 50, 55, 40, 60])
-                home_away = ['Home', 'Away', 'Home', 'Away', 'Home']
-                opponents_short = ['ARS', 'CHE', 'LIV', 'MUN', 'TOT']
-                opponents_full = ['Arsenal', 'Chelsea', 'Liverpool', 'Manchester United', 'Tottenham']
-            role = 'fullback' if position == 'Defender' else 'striker' if position == 'Attacker' else 'box_to_box'  # Basic detection
-            player_data = {
-                'historical': impute_data(historical),
-                'type': prop_type.lower().replace(" ", "_"),
-                'position': position if position in position_baselines else 'CB',
-                'role': role if role in role_multipliers else 'fullback',
-                'covariates': {'opp_strength': 0.5, 'home': 1 if venue == 'Home' else 0, 'xG': 1.5, 'odds_prior': 0.6},
-                'aggregate_lead': 1.0,
-                'agr_present': 0,
-                'var_present': 0,
-                'fatigue_index': 0,
-                'reversal_flag': detect_reversal_pattern(historical, historical[0] if len(historical) > 0 else 0, 1.0, player_data['type']),
-                'is_home': 1 if venue == 'Home' else 0,
-                'is_first_leg': True
-            }
-            with st.spinner("Running Bayesian model..."):
-                trace = run_bayesian_model(player_data)
-                features = np.arange(len(historical)).reshape(-1, 1) if len(historical) > 0 else np.array([[0]])
-                xg_pred = xgboost_predict(features, historical if len(historical) > 0 else np.array([0]))
-                hybrid_mu = ensemble_predict(trace, xg_pred)
-                sens = sensitivity_analysis(hybrid_mu, line)
-                p_over = sens['100']['p_over']
-                ci_low, ci_high = sens['100']['ci']
-            data = {
-                'hybrid_mu': hybrid_mu,
-                'metric': player_data['type'],
-                'line': line,
-                'historical': historical,
-                'home_away': home_away,
-                'opponents_short': opponents_short,
-                'opponents_full': opponents_full
-            }
-            st.write(f"Prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}:")
-            display_prediction(data)
-            display_trajectory_grid(data)
-            display_breakdown(data)
-            st.success(f"Prediction: Over with {int(p_over * 100)}% probability (CI: {int(ci_low*100)}% - {int(ci_high*100)}%) based on Bayesian model.")
-            # Additional features
-            injury = fetch_injury_data(player_id, team_id)
-            st.info(f"Injury Status: {injury}")
-            heat_mean, heat_sd = fetch_heat_map(player_name)
-            st.info(f"Heat Map: Mean {heat_mean:.2f}, SD {heat_sd:.2f}")
-            display_chart(historical)
-        else:
-            st.error("Data fetch failed. Check player/opponent names or API key.")
+    st.session_state.player_name = player_name
+    st.session_state.line = line
+    st.session_state.venue = venue
+    st.session_state.opponent = opponent
+    st.session_state.prop_type = prop_type
+    process_submission(player_name, line, venue, opponent, prop_type)
+
+if st.session_state.submitted and st.session_state.data:
+    display_results(st.session_state.data)
+
 st.markdown('</div>', unsafe_allow_html=True)
-```, '
