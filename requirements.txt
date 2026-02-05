@@ -1,0 +1,12 @@
+streamlit
+numpy
+pandas
+pymc
+arviz
+xgboost
+torch
+scikit-learn
+soccerdata
+matplotlib
+plotly
+requests
