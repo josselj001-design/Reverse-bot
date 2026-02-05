@@ -17,8 +17,11 @@ import soccerdata as sd
 import sqlite3
 import hashlib  # For password hashing
 
-# API Key from secrets (no prompt)
-API_KEY = st.secrets.get("API_KEY", 'dOc229af0abe00c84153c104995ee960')  # Fallback if not set
+# API key from Streamlit secrets (fail fast if missing)
+API_KEY = st.secrets.get("API_KEY")
+if not API_KEY:
+    st.error("API key not found. Please add API_KEY to Streamlit secrets.")
+    st.stop()
 
 # SQLite for User Login & Predictions
 DB_FILE = "reversebot.db"
@@ -198,7 +201,6 @@ def fetch_player_info(player_name, season=2025):
     except Exception as e:
         st.error(f"Player fetch failed: {e}")
         return None, None, None, None, None
-
 def fetch_opponent_id(opponent_name, league_id, season=2025):
     try:
         url = f"https://v3.football.api-sports.io/teams?season={season}&league={league_id}&search={opponent_name}"
@@ -210,7 +212,6 @@ def fetch_opponent_id(opponent_name, league_id, season=2025):
     except Exception as e:
         st.error(f"Opponent fetch failed: {e}")
         return None
-
 def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, prop_type='passes_attempted', num_matches=10):
     try:
         url_h2h = f"https://v3.football.api-sports.io/fixtures/headtohead?season={season}&h2h={team_id}-{opponent_id}&last={num_matches}"
@@ -243,11 +244,9 @@ def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, pro
     except Exception as e:
         st.error(f"H2H fetch failed: {e}")
         return np.array([]), [], ['OPP'] * num_matches
-
 def fetch_heat_map(player_name):
     # Placeholder; use tool for real
     return 0.88, 0.65
-
 def fetch_injury_data(player_id, team_id):
     # Placeholder; use /injuries
     return "No injury"
@@ -258,7 +257,6 @@ def impute_data(historical, n_matches=10, mean_val=0):
         imputed = np.random.poisson(mean_val, n_matches - len(historical))
         historical = np.concatenate([historical, imputed])
     return historical
-
 def detect_reversal_pattern(historical, first_leg_stat, lead, prop_type):
     # Placeholder
     return 'stable'
@@ -275,6 +273,7 @@ class SimpleTransformer(nn.Module):
         x = self.embedding(x.unsqueeze(-1))
         x = self.transformer(x)
         return self.fc(x.mean(dim=1)).squeeze()
+
 
 def get_time_adjustment(time_series):
     if len(time_series) == 0:
@@ -298,8 +297,7 @@ def xgboost_predict(features, targets):
     X_train, X_test, y_train, y_test = train_test_split(features, targets, test_size=0.2)
     model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=50)
     model.fit(X_train, y_train)
-    return model.predict(X_test)[0] if len(X_test) > 0 else 0.0
-
+    return model.predict(X_test)[0] if len(X_TEST) > 0 else 0.0
 def run_bayesian_model(player_data):
     historical = player_data['historical']
     n = len(historical)
@@ -355,11 +353,9 @@ def run_bayesian_model(player_data):
         trace = pm.sample(500, tune=300, return_inferencedata=True, target_accept=0.9, progressbar=False)
     
     return trace
-
 def ensemble_predict(trace, xg_pred):
     bay_mean = az.summary(trace, var_names=['mu'])['mean'][0]
     return (bay_mean + xg_pred) / 2 if xg_pred else bay_mean
-
 def sensitivity_analysis(mu, line, phi_values=[50, 100, 200], n_samples=5000):
     results = {}
     for phi in phi_values:
