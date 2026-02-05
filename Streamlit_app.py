@@ -6,43 +6,36 @@ import arviz as az
 import xgboost as xgb
 import torch
 import torch.nn as nn
-from sklearn.ensemble import StackingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
-from sklearn.cluster import KMeans
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
 import requests
 import soccerdata as sd
-import sqlite3
-import hashlib  # For password hashing
+import matplotlib.pyplot as plt
+import altair as alt
+from datetime import datetime
 
-# Set page config for centered layout and title
+# Set page config
 st.set_page_config(
     page_title="Soccer Prediction Bot",
     layout="centered",
-    initial_sidebar_state="collapsed"  # Hide sidebar by default
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for iOS-like style: black background, emerald green, rounded cards, Apple fonts, hide branding
+# Custom CSS
 st.markdown("""
     <style>
-        /* Black background */
         [data-testid="stAppViewContainer"] {
             background-color: #000000;
         }
-        /* Hide Streamlit menu, footer, and header */
         header {visibility: hidden;}
         footer {visibility: hidden;}
         [data-testid="collapsedControl"] {display: none !important;}
         [data-testid="stToolbar"] {display: none !important;}
         .stApp [data-testid="stDecoration"] {display: none;}
-        /* Apple-style fonts */
         body, h1, h2, h3, h4, h5, h6, label, p, div, span, input {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
             color: #FFFFFF !important;
         }
-        /* Emerald green buttons */
         .stButton > button {
             background-color: #0BDA51 !important;
             color: #000000 !important;
@@ -55,7 +48,6 @@ st.markdown("""
         .stButton > button:hover {
             background-color: #0AA841 !important;
         }
-        /* Inputs with emerald borders, rounded */
         .stTextInput > div > div > div {
             background-color: #1A1A1A !important;
             border: 1px solid #0BDA51 !important;
@@ -67,13 +59,11 @@ st.markdown("""
             border: 1px solid #0BDA51 !important;
             box-shadow: 0 0 5px #0BDA51 !important;
         }
-        /* Number input adjustments */
         .stNumberInput > div > div > div {
             background-color: #1A1A1A !important;
             border: 1px solid #0BDA51 !important;
             border-radius: 8px !important;
         }
-        /* Radio buttons with emerald accents, no red */
         div.row-widget.stRadio > div {
             flex-direction: row !important;
             gap: 10px !important;
@@ -89,15 +79,15 @@ st.markdown("""
             color: #000000 !important;
         }
         input[type="radio"] {
-            accent-color: #0BDA51 !important;  /* Emerald dots */
+            accent-color: #0BDA51 !important;
+            -webkit-accent-color: #0BDA51 !important;
         }
-        /* Alerts emerald */
         [data-testid="stAlert"] {
             background-color: #0BDA51 !important;
             color: #000000 !important;
             border-radius: 8px !important;
+            border: none !important;
         }
-        /* Centered card for content */
         .centered-card {
             max-width: 90%;
             margin: 20px auto;
@@ -106,7 +96,6 @@ st.markdown("""
             background-color: #111111;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
-        /* Responsive for mobile */
         @media (max-width: 768px) {
             .stColumn > div {
                 width: 100% !important;
@@ -118,48 +107,19 @@ st.markdown("""
             h1 { font-size: 1.8em !important; }
             h2, h3 { font-size: 1.4em !important; }
         }
-        /* Match buttons emerald */
         .stButton > button[kind="secondary"] {
             background-color: #0BDA51 !important;
             color: #000000 !important;
+            width: auto !important;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# API key from Streamlit secrets
+# API key
 API_KEY = st.secrets.get("API_KEY")
 if not API_KEY:
     st.error("API key not found. Please add API_KEY to Streamlit secrets.")
     st.stop()
-
-# SQLite for Predictions
-DB_FILE = "reversebot.db"
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            player_name TEXT,
-            team_name TEXT,
-            league TEXT,
-            metric TEXT,
-            line REAL,
-            venue TEXT,
-            opponent TEXT,
-            role TEXT,
-            projected_value REAL,
-            ci_low REAL,
-            ci_high REAL,
-            p_over REAL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
 
 # League ID Map
 league_to_id = {
@@ -209,39 +169,60 @@ if 'player_data' not in st.session_state:
     st.session_state.player_data = None
 
 # Data Fetch Functions
-def fetch_player_info(player_name, season=2025):
+def fetch_player_info(player_name, season=None):
+    if season is None:
+        season = datetime.now().year
     try:
         url = f"https://v3.football.api-sports.io/players?season={season}&search={player_name}"
         headers = {"x-apisports-key": API_KEY}
-        response = requests.get(url, headers=headers).json()
-        if not response['response']:
-            return None, None, None, None, None
-        player = response['response'][0]
-        return (player['player']['id'], player['statistics'][0]['team']['name'],
-                player['statistics'][0]['team']['id'], player['statistics'][0]['league']['name'],
-                player['statistics'][0]['league']['id'])
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if not data['response']:
+            return None, None, None, None, None, None
+        player = data['response'][0]
+        position = player['statistics'][0]['games']['position']  # Detect position
+        return (
+            player['player']['id'],
+            player['statistics'][0]['team']['name'],
+            player['statistics'][0]['team']['id'],
+            player['statistics'][0]['league']['name'],
+            player['statistics'][0]['league']['id'],
+            position
+        )
+    except requests.exceptions.HTTPError as he:
+        st.error(f"HTTP error: {he}")
     except Exception as e:
         st.error(f"Player fetch failed: {e}")
-        return None, None, None, None, None
+    return None, None, None, None, None, None
 
-def fetch_opponent_id(opponent_name, league_id, season=2025):
+def fetch_opponent_id(opponent_name, league_id, season=None):
+    if season is None:
+        season = datetime.now().year
     try:
         url = f"https://v3.football.api-sports.io/teams?season={season}&league={league_id}&search={opponent_name}"
         headers = {"x-apisports-key": API_KEY}
-        response = requests.get(url, headers=headers).json()
-        if not response['response']:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if not data['response']:
             return None
-        return response['response'][0]['team']['id']
+        return data['response'][0]['team']['id']
+    except requests.exceptions.HTTPError as he:
+        st.error(f"HTTP error: {he}")
     except Exception as e:
         st.error(f"Opponent fetch failed: {e}")
-        return None
+    return None
 
-def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, prop_type='passes_attempted', num_matches=10):
+def fetch_real_data(player_id, team_id, opponent_id, league_id, season=None, prop_type='passes_attempted', num_matches=10):
+    if season is None:
+        season = datetime.now().year
     try:
         url_h2h = f"https://v3.football.api-sports.io/fixtures/headtohead?season={season}&h2h={team_id}-{opponent_id}&last={num_matches}"
         headers = {"x-apisports-key": API_KEY}
-        response_h2h = requests.get(url_h2h, headers=headers).json()
-        h2h_data = response_h2h['response']
+        response_h2h = requests.get(url_h2h, headers=headers)
+        response_h2h.raise_for_status()
+        h2h_data = response_h2h.json()['response']
         fixture_ids = [f['fixture']['id'] for f in h2h_data]
         
         historical = []
@@ -250,15 +231,19 @@ def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, pro
         opponents_full = []
         for fixture_id in fixture_ids:
             url_stats = f"https://v3.football.api-sports.io/players?fixture={fixture_id}&player={player_id}"
-            response_stats = requests.get(url_stats, headers=headers).json()
-            if response_stats['response']:
-                stats = response_stats['response'][0]['statistics'][0]
+            response_stats = requests.get(url_stats, headers=headers)
+            response_stats.raise_for_status()
+            stats_data = response_stats.json()['response']
+            if stats_data:
+                stats = stats_data[0]['statistics'][0]
                 if prop_type == 'passes_attempted':
-                    val = stats['passes']['total'] or 0
+                    val = stats.get('passes', {}).get('total', 0)
                 elif prop_type == 'saves':
-                    val = stats['goals']['saves'] or 0
+                    val = stats.get('goals', {}).get('saves', 0)
                 elif prop_type == 'shots_attempted':
-                    val = stats['shots']['total'] or 0
+                    val = stats.get('shots', {}).get('total', 0)
+                else:
+                    val = 0
                 historical.append(val)
                 fixture = next(f for f in h2h_data if f['fixture']['id'] == fixture_id)
                 ha = 'Home' if fixture['teams']['home']['id'] == team_id else 'Away'
@@ -267,15 +252,11 @@ def fetch_real_data(player_id, team_id, opponent_id, league_id, season=2025, pro
                 opponents_short.append(opp[:3].upper())
                 opponents_full.append(opp)
         return np.array(historical), home_away, opponents_short, opponents_full
+    except requests.exceptions.HTTPError as he:
+        st.error(f"HTTP error: {he}")
     except Exception as e:
         st.error(f"H2H fetch failed: {e}")
-        return np.array([]), [], [], []
-
-def fetch_heat_map(player_name):
-    return 0.88, 0.65
-
-def fetch_injury_data(player_id, team_id):
-    return "No injury"
+    return np.array([]), [], [], []
 
 # Model Functions
 def impute_data(historical, n_matches=10, mean_val=0):
@@ -328,8 +309,11 @@ def run_bayesian_model(player_data):
     historical = player_data['historical']
     n = len(historical)
     prop_type = player_data['type']
-    position_mean = position_baselines[player_data['position']][prop_type]['mean']
-    position_sd = position_baselines[player_data['position']][prop_type]['sd']
+    position = player_data['position']
+    if position not in position_baselines:
+        position = 'CB'  # Fallback
+    position_mean = position_baselines[position].get(prop_type, {'mean': 30.0})['mean']
+    position_sd = position_baselines[position].get(prop_type, {'sd': 10.0})['sd']
     
     with pm.Model() as model:
         mu_base = pm.Normal('mu_base', mu=position_mean, sigma=position_sd)
@@ -401,7 +385,7 @@ def display_prediction(data):
 
 def display_trajectory_grid(data):
     st.subheader("Recent Match Data")
-    cols = st.columns(min(5, len(data['historical'])))  # Responsive columns
+    cols = st.columns(min(5, len(data['historical'])))  # Responsive
     total = 0
     count = 0
     selected = st.session_state.get('selected', [])
@@ -411,7 +395,7 @@ def display_trajectory_grid(data):
         opp = data['opponents_short'][i]
         label = f"@{opp}" if ha == 'Away' else f"vs{opp}"
         with cols[i % len(cols)]:
-            if st.button(label, key=i, help=f"Match {i+1}: {val} {data['metric'].replace('_', ' ')} ({ha} vs {data['opponents_full'][i]})"):
+            if st.button(label, key=i, help=f"Match {i+1}: {val} {data['metric'].replace('_', ' ')} ({ha} vs {data['opponents_full'][i]})", type="secondary"):
                 selected.append(val)
                 st.session_state.selected = selected
         if len(selected) > count:
@@ -424,83 +408,94 @@ def display_breakdown(data):
     for i, (val, ha, opp) in enumerate(zip(data['historical'], data['home_away'], data['opponents_full'])):
         st.write(f"Match {i+1} ({ha} vs {opp}): {val}")
 
+def display_chart(historical):
+    if len(historical) > 0:
+        df = pd.DataFrame({'Match': range(1, len(historical) + 1), 'Value': historical})
+        chart = alt.Chart(df).mark_bar(color='#0BDA51').encode(
+            x='Match:O',
+            y='Value:Q'
+        ).properties(width='100%')
+        st.altair_chart(chart, use_container_width=True)
+
 # Main UI
-with st.container(border=True):  # Rounded card
-    st.header("Soccer Prediction Bot 5.06")
-    st.subheader("Real-time FBRef data with Bayesian analysis")
+st.markdown('<div class="centered-card">', unsafe_allow_html=True)
+st.header("Soccer Prediction Bot 5.06")
+st.subheader("Real-time FBRef data with Bayesian analysis")
 
-    st.write("### Query")
+st.write("### Query")
 
-    player_name = st.text_input("Player Name", value="Kyle Walker")
+player_name = st.text_input("Player Name", value="Kyle Walker")
 
-    line = st.number_input("Line", value=46.5, step=0.5)
+line = st.number_input("Line", value=46.5, step=0.5)
 
-    col1, col2 = st.columns(2)
+col1, col2 = st.columns(2)
 
-    with col1:
-        venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
+with col1:
+    venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
 
-    with col2:
-        opponent = st.text_input("Opponent", value="Arsenal")
+with col2:
+    opponent = st.text_input("Opponent", value="Arsenal")
 
-    prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
+prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
 
-    if st.button("Submit"):
-        # Real logic placeholder
-        player_id, team_name, team_id, league_name, league_id = fetch_player_info(player_name)
+if st.button("Submit", type="primary"):
+    with st.spinner("Fetching data..."):
+        player_id, team_name, team_id, league_name, league_id, position = fetch_player_info(player_name)
         opponent_id = fetch_opponent_id(opponent, league_id)
-        if player_id and team_id and opponent_id and league_id:
+        if player_id and team_id and opponent_id and league_id and position:
             historical, home_away, opponents_short, opponents_full = fetch_real_data(player_id, team_id, opponent_id, league_id, prop_type=prop_type.lower().replace(" ", "_"))
-            # Assume position, role, covariates, etc., for model
+            if len(historical) == 0:
+                st.warning("No historical data found. Using placeholder.")
+                historical = np.array([45, 50, 55, 40, 60])
+                home_away = ['Home', 'Away', 'Home', 'Away', 'Home']
+                opponents_short = ['ARS', 'CHE', 'LIV', 'MUN', 'TOT']
+                opponents_full = ['Arsenal', 'Chelsea', 'Liverpool', 'Manchester United', 'Tottenham']
+            role = 'fullback' if position == 'Defender' else 'striker' if position == 'Attacker' else 'box_to_box'  # Basic detection
             player_data = {
-                'historical': historical,
+                'historical': impute_data(historical),
                 'type': prop_type.lower().replace(" ", "_"),
-                'position': 'CB',  # Placeholder
-                'role': 'fullback',  # Placeholder
+                'position': position if position in position_baselines else 'CB',
+                'role': role if role in role_multipliers else 'fullback',
                 'covariates': {'opp_strength': 0.5, 'home': 1 if venue == 'Home' else 0, 'xG': 1.5, 'odds_prior': 0.6},
                 'aggregate_lead': 1.0,
                 'agr_present': 0,
                 'var_present': 0,
                 'fatigue_index': 0,
-                'reversal_flag': 'stable',
+                'reversal_flag': detect_reversal_pattern(historical, historical[0] if len(historical) > 0 else 0, 1.0, player_data['type']),
                 'is_home': 1 if venue == 'Home' else 0,
-                'is_first_leg': True  # Placeholder
+                'is_first_leg': True
             }
-            trace = run_bayesian_model(player_data)
-            xg_pred = xgboost_predict(np.arange(len(historical)).reshape(-1, 1), historical)  # Placeholder features
-            hybrid_mu = ensemble_predict(trace, xg_pred)
-            p_over = sensitivity_analysis(hybrid_mu, line)['100']['p_over']
-            # Save to DB (no user_id since no login)
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO predictions (player_name, team_name, league, metric, line, venue, opponent, role, projected_value, p_over)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (player_name, team_name, league_name, prop_type.lower().replace(" ", "_"), line, venue, opponent, player_data['role'], hybrid_mu, p_over))
-            conn.commit()
-            conn.close()
+            with st.spinner("Running Bayesian model..."):
+                trace = run_bayesian_model(player_data)
+                features = np.arange(len(historical)).reshape(-1, 1) if len(historical) > 0 else np.array([[0]])
+                xg_pred = xgboost_predict(features, historical if len(historical) > 0 else np.array([0]))
+                hybrid_mu = ensemble_predict(trace, xg_pred)
+                sens = sensitivity_analysis(hybrid_mu, line)
+                p_over = sens['100']['p_over']
+                ci_low, ci_high = sens['100']['ci']
             data = {
                 'hybrid_mu': hybrid_mu,
-                'metric': prop_type.lower().replace(" ", "_"),
+                'metric': player_data['type'],
                 'line': line,
                 'historical': historical,
                 'home_away': home_away,
                 'opponents_short': opponents_short,
                 'opponents_full': opponents_full
             }
+            st.write(f"Prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}:")
+            display_prediction(data)
+            display_trajectory_grid(data)
+            display_breakdown(data)
+            st.success(f"Prediction: Over with {int(p_over * 100)}% probability (CI: {int(ci_low*100)}% - {int(ci_high*100)}%) based on Bayesian model.")
+            # Additional features
+            injury = fetch_injury_data(player_id, team_id)
+            st.info(f"Injury Status: {injury}")
+            heat_mean, heat_sd = fetch_heat_map(player_name)
+            st.info(f"Heat Map: Mean {heat_mean:.2f}, SD {heat_sd:.2f}")
+            display_chart(historical)
         else:
-            st.error("Failed to fetch data. Using placeholder.")
-            data = {
-                'hybrid_mu': 50.2,
-                'metric': prop_type.lower().replace(" ", "_"),
-                'line': line,
-                'historical': [45, 50, 55, 40, 60],
-                'home_away': ['Home', 'Away', 'Home', 'Away', 'Home'],
-                'opponents_short': ['ARS', 'CHE', 'LIV', 'MUN', 'TOT'],
-                'opponents_full': ['Arsenal', 'Chelsea', 'Liverpool', 'Manchester United', 'Tottenham']
-            }
-        st.write(f"Processing prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}...")
-        display_prediction(data)
-        display_trajectory_grid(data)
-        display_breakdown(data)
-        st.success(f"Prediction: Over with {int(data.get('p_over', 0.65)*100)}% probability (based on Bayesian model).")
+            st.error("Data fetch failed. Check player/opponent names or API key.")
+st.markdown('</div>', unsafe_allow_html=True)
+```")
+
+line
