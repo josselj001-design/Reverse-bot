@@ -17,7 +17,7 @@ import soccerdata as sd
 import sqlite3
 import hashlib  # For password hashing
 
-# Custom CSS for black background and green styling (moved to top so it applies to login screen too)
+# Custom CSS for black background, green styling, centering, and responsiveness
 st.markdown("""
     <style>
         /* Black background for the entire app */
@@ -73,6 +73,41 @@ st.markdown("""
             background-color: #333333 !important;
             color: #FFFFFF !important;
         }
+        /* Override error alerts to green (instead of red) */
+        [data-testid="stAlert"] {
+            background-color: #32CD32 !important;
+            color: #000000 !important;
+        }
+        /* Center the login form */
+        .centered-form {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            /* Stack columns vertically on small screens */
+            .stColumn {
+                flex-direction: column !important;
+            }
+            div.row-widget.stRadio > div {
+                flex-direction: column;
+                gap: 5px;
+            }
+            .stButton > button {
+                width: 100%;
+            }
+            .stTextInput {
+                width: 100%;
+            }
+            /* Adjust tabs for mobile */
+            .stTabs [data-baseweb="tab-list"] {
+                flex-direction: column;
+            }
+            /* Make headers smaller */
+            h1, h2, h3 {
+                font-size: 1.5em !important;
+            }
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -126,67 +161,67 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_username = None
 
 if not st.session_state.logged_in:
-    # Display logo on login screen
-    st.image("logo.png", width=200)  # Adjust width as needed; assumes logo.png is in your repo
-
-    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
-    
-    with tab1:
-        st.subheader("Login")
-        username = st.text_input("Username", key="login_user")
-        password = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Login"):
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute("SELECT id FROM users WHERE username=? AND password_hash=?", (username, password_hash))
-            user = c.fetchone()
-            conn.close()
-            if user:
-                st.session_state.logged_in = True
-                st.session_state.user_id = user[0]
-                st.session_state.user_username = username
-                st.success("Logged in!")
-            else:
-                st.error("Invalid credentials")
-    
-    with tab2:
-        st.subheader("Sign Up")
-        new_user = st.text_input("New Username", key="signup_user")
-        new_pass = st.text_input("New Password", type="password", key="signup_pass")
-        if st.button("Sign Up"):
-            if new_user and new_pass:
-                password_hash = hashlib.sha256(new_pass.encode()).hexdigest()
+    # Center the login form using columns
+    col1, col2, col3 = st.columns([1, 2, 1])  # Wider middle column for centering
+    with col2:
+        tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
+        
+        with tab1:
+            st.subheader("Login")
+            username = st.text_input("Username", key="login_user")
+            password = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Login"):
+                password_hash = hashlib.sha256(password.encode()).hexdigest()
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                try:
-                    c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (new_user, password_hash))
-                    conn.commit()
-                    st.success("Account created! Log in now.")
-                except sqlite3.IntegrityError:
-                    st.error("Username already exists")
+                c.execute("SELECT id FROM users WHERE username=? AND password_hash=?", (username, password_hash))
+                user = c.fetchone()
                 conn.close()
-            else:
-                st.error("Fill in all fields")
-    
-    with tab3:
-        st.subheader("Reset Password")
-        reset_user = st.text_input("Username for Reset", key="reset_user")
-        new_reset_pass = st.text_input("New Password", type="password", key="reset_pass")
-        if st.button("Reset"):
-            if reset_user and new_reset_pass:
-                password_hash = hashlib.sha256(new_reset_pass.encode()).hexdigest()
-                conn = sqlite3.connect(DB_FILE)
-                c = conn.cursor()
-                c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, reset_user))
-                if c.rowcount > 0:
-                    st.success("Password reset! Log in with new password.")
+                if user:
+                    st.session_state.logged_in = True
+                    st.session_state.user_id = user[0]
+                    st.session_state.user_username = username
+                    st.success("Logged in!")
                 else:
-                    st.error("Username not found")
-                conn.commit()
-                conn.close()
-            else:
-                st.error("Fill in all fields")
+                    st.error("Invalid credentials")
+        
+        with tab2:
+            st.subheader("Sign Up")
+            new_user = st.text_input("New Username", key="signup_user")
+            new_pass = st.text_input("New Password", type="password", key="signup_pass")
+            if st.button("Sign Up"):
+                if new_user and new_pass:
+                    password_hash = hashlib.sha256(new_pass.encode()).hexdigest()
+                    conn = sqlite3.connect(DB_FILE)
+                    c = conn.cursor()
+                    try:
+                        c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (new_user, password_hash))
+                        conn.commit()
+                        st.success("Account created! Log in now.")
+                    except sqlite3.IntegrityError:
+                        st.error("Username already exists")
+                    conn.close()
+                else:
+                    st.error("Fill in all fields")
+        
+        with tab3:
+            st.subheader("Reset Password")
+            reset_user = st.text_input("Username for Reset", key="reset_user")
+            new_reset_pass = st.text_input("New Password", type="password", key="reset_pass")
+            if st.button("Reset"):
+                if reset_user and new_reset_pass:
+                    password_hash = hashlib.sha256(new_reset_pass.encode()).hexdigest()
+                    conn = sqlite3.connect(DB_FILE)
+                    c = conn.cursor()
+                    c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, reset_user))
+                    if c.rowcount > 0:
+                        st.success("Password reset! Log in with new password.")
+                    else:
+                        st.error("Username not found")
+                    conn.commit()
+                    conn.close()
+                else:
+                    st.error("Fill in all fields")
 
     st.stop()
 
