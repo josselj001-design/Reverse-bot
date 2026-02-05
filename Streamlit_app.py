@@ -17,7 +17,7 @@ import soccerdata as sd
 import sqlite3
 import hashlib  # For password hashing
 
-# Custom CSS for black background, green styling, centering, and responsiveness
+# Custom CSS for black background, green styling, centering, responsiveness, and iOS-like login
 st.markdown("""
     <style>
         /* Black background for the entire app */
@@ -30,26 +30,36 @@ st.markdown("""
         }
         /* Green for primary buttons and selected states */
         .stButton > button {
-            background-color: #32CD32 !important;  /* Vibrant green from your logo */
+            background-color: #32CD32 !important;  /* Vibrant green */
             color: #000000 !important;
             border: none;
+            border-radius: 8px;  /* Rounded like iOS */
+            padding: 10px;
+            font-size: 16px;
         }
-        /* Secondary (unselected) buttons dark gray on black */
+        /* Secondary buttons dark gray */
         .stButton > button[kind="secondary"] {
             background-color: #333333 !important;
             color: #FFFFFF !important;
         }
-        /* Hover effect for buttons */
+        /* Hover effect */
         .stButton > button:hover {
-            background-color: #28A428 !important;  /* Darker green */
+            background-color: #28A428 !important;
         }
-        /* Input fields with dark theme */
+        /* Input fields with iOS-like style */
         .stTextInput > div > div > div {
             background-color: #1A1A1A;
-            border: 1px solid #32CD32;
+            border: 1px solid #32CD32 !important;  /* Green borders */
+            border-radius: 8px;  /* Rounded */
             color: #FFFFFF;
+            padding: 10px;
         }
-        /* Radio buttons styled as toggle buttons */
+        /* Override focus/error borders to green (no red) */
+        .stTextInput > div > div > div:focus, .stTextInput > div > div > div:active {
+            border: 1px solid #32CD32 !important;
+            box-shadow: 0 0 5px #32CD32 !important;
+        }
+        /* Radio buttons styled as toggle */
         div.row-widget.stRadio > div {
             flex-direction: row;
             gap: 10px;
@@ -57,35 +67,46 @@ st.markdown("""
         div.row-widget.stRadio > div > label > div {
             background-color: #333333;
             padding: 10px 20px;
-            border-radius: 5px;
+            border-radius: 8px;
             color: #FFFFFF;
         }
         div.row-widget.stRadio > div > label[data-checked="true"] > div {
             background-color: #32CD32;
             color: #000000;
         }
-        /* Tabs styling to match theme */
-        .stTabs [data-baseweb="tab-list"] button [kind="primary"] {
-            background-color: #32CD32 !important;
-            color: #000000 !important;
+        /* Tabs styling for iOS-like */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+            justify-content: center;
         }
         .stTabs [data-baseweb="tab-list"] button {
             background-color: #333333 !important;
             color: #FFFFFF !important;
+            border-radius: 8px;
+            padding: 10px 20px;
         }
-        /* Override error alerts to green (instead of red) */
-        [data-testid="stAlert"] {
+        .stTabs [data-baseweb="tab-list"] button [kind="primary"] {
             background-color: #32CD32 !important;
             color: #000000 !important;
         }
-        /* Center the login form */
+        /* Override alerts to green */
+        [data-testid="stAlert"] {
+            background-color: #32CD32 !important;
+            color: #000000 !important;
+            border-radius: 8px;
+        }
+        /* Center forms */
         .centered-form {
-            max-width: 600px;
+            max-width: 400px;  /* Narrower for mobile/iOS feel */
             margin: 0 auto;
+            padding: 20px;
+            border-radius: 12px;
+            background-color: #111111;  /* Slight card for iOS depth */
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         }
         /* Responsive adjustments */
         @media (max-width: 768px) {
-            /* Stack columns vertically on small screens */
+            /* Stack on small screens */
             .stColumn {
                 flex-direction: column !important;
             }
@@ -93,17 +114,14 @@ st.markdown("""
                 flex-direction: column;
                 gap: 5px;
             }
-            .stButton > button {
+            .stButton > button, .stTextInput {
                 width: 100%;
             }
-            .stTextInput {
-                width: 100%;
-            }
-            /* Adjust tabs for mobile */
+            /* Tabs horizontal but smaller */
             .stTabs [data-baseweb="tab-list"] {
-                flex-direction: column;
+                flex-direction: row;
+                overflow-x: auto;
             }
-            /* Make headers smaller */
             h1, h2, h3 {
                 font-size: 1.5em !important;
             }
@@ -161,67 +179,65 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_username = None
 
 if not st.session_state.logged_in:
-    # Center the login form using columns
-    col1, col2, col3 = st.columns([1, 2, 1])  # Wider middle column for centering
-    with col2:
-        tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
-        
-        with tab1:
-            st.subheader("Login")
-            username = st.text_input("Username", key="login_user")
-            password = st.text_input("Password", type="password", key="login_pass")
-            if st.button("Login"):
-                password_hash = hashlib.sha256(password.encode()).hexdigest()
+    # Center the login form with iOS-like card
+    st.markdown('<div class="centered-form">', unsafe_allow_html=True)
+    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
+    
+    with tab1:
+        # Removed redundant subheader
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
+        if st.button("Login"):
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT id FROM users WHERE username=? AND password_hash=?", (username, password_hash))
+            user = c.fetchone()
+            conn.close()
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.user_id = user[0]
+                st.session_state.user_username = username
+                st.success("Logged in!")
+            else:
+                st.error("Invalid credentials")
+    
+    with tab2:
+        new_user = st.text_input("New Username", key="signup_user")
+        new_pass = st.text_input("New Password", type="password", key="signup_pass")
+        if st.button("Sign Up"):
+            if new_user and new_pass:
+                password_hash = hashlib.sha256(new_pass.encode()).hexdigest()
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                c.execute("SELECT id FROM users WHERE username=? AND password_hash=?", (username, password_hash))
-                user = c.fetchone()
-                conn.close()
-                if user:
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = user[0]
-                    st.session_state.user_username = username
-                    st.success("Logged in!")
-                else:
-                    st.error("Invalid credentials")
-        
-        with tab2:
-            st.subheader("Sign Up")
-            new_user = st.text_input("New Username", key="signup_user")
-            new_pass = st.text_input("New Password", type="password", key="signup_pass")
-            if st.button("Sign Up"):
-                if new_user and new_pass:
-                    password_hash = hashlib.sha256(new_pass.encode()).hexdigest()
-                    conn = sqlite3.connect(DB_FILE)
-                    c = conn.cursor()
-                    try:
-                        c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (new_user, password_hash))
-                        conn.commit()
-                        st.success("Account created! Log in now.")
-                    except sqlite3.IntegrityError:
-                        st.error("Username already exists")
-                    conn.close()
-                else:
-                    st.error("Fill in all fields")
-        
-        with tab3:
-            st.subheader("Reset Password")
-            reset_user = st.text_input("Username for Reset", key="reset_user")
-            new_reset_pass = st.text_input("New Password", type="password", key="reset_pass")
-            if st.button("Reset"):
-                if reset_user and new_reset_pass:
-                    password_hash = hashlib.sha256(new_reset_pass.encode()).hexdigest()
-                    conn = sqlite3.connect(DB_FILE)
-                    c = conn.cursor()
-                    c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, reset_user))
-                    if c.rowcount > 0:
-                        st.success("Password reset! Log in with new password.")
-                    else:
-                        st.error("Username not found")
+                try:
+                    c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (new_user, password_hash))
                     conn.commit()
-                    conn.close()
+                    st.success("Account created! Log in now.")
+                except sqlite3.IntegrityError:
+                    st.error("Username already exists")
+                conn.close()
+            else:
+                st.error("Fill in all fields")
+    
+    with tab3:
+        reset_user = st.text_input("Username for Reset", key="reset_user")
+        new_reset_pass = st.text_input("New Password", type="password", key="reset_pass")
+        if st.button("Reset"):
+            if reset_user and new_reset_pass:
+                password_hash = hashlib.sha256(new_reset_pass.encode()).hexdigest()
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, reset_user))
+                if c.rowcount > 0:
+                    st.success("Password reset! Log in with new password.")
                 else:
-                    st.error("Fill in all fields")
+                    st.error("Username not found")
+                conn.commit()
+                conn.close()
+            else:
+                st.error("Fill in all fields")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.stop()
 
@@ -494,7 +510,8 @@ def display_breakdown(data):
     for i, (val, ha) in enumerate(zip(data['historical'], data['home_away'])):
         st.write(f"Match {i+1} ({ha} vs {data['opponent']}): {val}")
 
-# Main UI after login
+# Main UI after login (centered for better look)
+st.markdown('<div class="centered-form">', unsafe_allow_html=True)
 st.header("Soccer Prediction Bot 5.06")
 st.subheader("Real-time FBRef data with Bayesian analysis")
 
@@ -515,11 +532,7 @@ with col2:
 prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
 
 if st.button("Submit", type="primary"):
-    # Add your prediction logic here (e.g., fetch FBRef data, run Bayesian analysis)
-    # For example, call fetch_player_info(player_name), etc., and process
-    # Then display results using your display_prediction, display_trajectory_grid, etc.
     st.write(f"Processing prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}...")
-    # Example placeholder output (replace with real data dict)
     example_data = {
         'hybrid_mu': 50.2,
         'metric': 'pass_attempts',
@@ -527,9 +540,10 @@ if st.button("Submit", type="primary"):
         'historical': [45, 50, 55, 40, 60],
         'home_away': ['Home', 'Away', 'Home', 'Away', 'Home'],
         'opponents_short': ['ARS', 'CHE', 'LIV', 'MUN', 'TOT'],
-        'opponent': opponent  # For breakdown
+        'opponent': opponent
     }
     display_prediction(example_data)
     display_trajectory_grid(example_data)
     display_breakdown(example_data)
     st.success("Prediction: Over with 65% probability (based on Bayesian model).")
+st.markdown('</div>', unsafe_allow_html=True)
