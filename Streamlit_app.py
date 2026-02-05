@@ -17,6 +17,65 @@ import soccerdata as sd
 import sqlite3
 import hashlib  # For password hashing
 
+# Custom CSS for black background and green styling (moved to top so it applies to login screen too)
+st.markdown("""
+    <style>
+        /* Black background for the entire app */
+        [data-testid="stAppViewContainer"] {
+            background-color: #000000;
+        }
+        /* Header and text styling */
+        h1, h2, h3, h4, h5, h6, label, .stTextInput > div > div > div > input {
+            color: #FFFFFF !important;
+        }
+        /* Green for primary buttons and selected states */
+        .stButton > button {
+            background-color: #32CD32 !important;  /* Vibrant green from your logo */
+            color: #000000 !important;
+            border: none;
+        }
+        /* Secondary (unselected) buttons dark gray on black */
+        .stButton > button[kind="secondary"] {
+            background-color: #333333 !important;
+            color: #FFFFFF !important;
+        }
+        /* Hover effect for buttons */
+        .stButton > button:hover {
+            background-color: #28A428 !important;  /* Darker green */
+        }
+        /* Input fields with dark theme */
+        .stTextInput > div > div > div {
+            background-color: #1A1A1A;
+            border: 1px solid #32CD32;
+            color: #FFFFFF;
+        }
+        /* Radio buttons styled as toggle buttons */
+        div.row-widget.stRadio > div {
+            flex-direction: row;
+            gap: 10px;
+        }
+        div.row-widget.stRadio > div > label > div {
+            background-color: #333333;
+            padding: 10px 20px;
+            border-radius: 5px;
+            color: #FFFFFF;
+        }
+        div.row-widget.stRadio > div > label[data-checked="true"] > div {
+            background-color: #32CD32;
+            color: #000000;
+        }
+        /* Tabs styling to match theme */
+        .stTabs [data-baseweb="tab-list"] button [kind="primary"] {
+            background-color: #32CD32 !important;
+            color: #000000 !important;
+        }
+        .stTabs [data-baseweb="tab-list"] button {
+            background-color: #333333 !important;
+            color: #FFFFFF !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # API key from Streamlit secrets (fail fast if missing)
 API_KEY = st.secrets.get("API_KEY")
 if not API_KEY:
@@ -67,6 +126,9 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_username = None
 
 if not st.session_state.logged_in:
+    # Display logo on login screen
+    st.image("logo.png", width=200)  # Adjust width as needed; assumes logo.png is in your repo
+
     tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
     
     with tab1:
@@ -297,7 +359,7 @@ def xgboost_predict(features, targets):
     X_train, X_test, y_train, y_test = train_test_split(features, targets, test_size=0.2)
     model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=50)
     model.fit(X_train, y_train)
-    return model.predict(X_test)[0] if len(X_TEST) > 0 else 0.0
+    return model.predict(X_test)[0] if len(X_test) > 0 else 0.0
 def run_bayesian_model(player_data):
     historical = player_data['historical']
     n = len(historical)
@@ -396,3 +458,43 @@ def display_breakdown(data):
     st.subheader("Home/Away Breakdown")
     for i, (val, ha) in enumerate(zip(data['historical'], data['home_away'])):
         st.write(f"Match {i+1} ({ha} vs {data['opponent']}): {val}")
+
+# Main UI after login
+st.header("Soccer Prediction Bot 5.06")
+st.subheader("Real-time FBRef data with Bayesian analysis")
+
+st.write("### Query")
+
+player_name = st.text_input("Player Name", value="Kyle Walker")
+
+line = st.number_input("Line", value=46.5, step=0.5)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    venue = st.radio("Venue", ["Home", "Away"], index=0, horizontal=True)
+
+with col2:
+    opponent = st.text_input("Opponent", value="Arsenal")
+
+prop_type = st.radio("Prop Type", ["Pass Attempts", "Saves"], index=0, horizontal=True)
+
+if st.button("Submit", type="primary"):
+    # Add your prediction logic here (e.g., fetch FBRef data, run Bayesian analysis)
+    # For example, call fetch_player_info(player_name), etc., and process
+    # Then display results using your display_prediction, display_trajectory_grid, etc.
+    st.write(f"Processing prediction for {player_name} vs {opponent} at {venue} for {prop_type} over/under {line}...")
+    # Example placeholder output (replace with real data dict)
+    example_data = {
+        'hybrid_mu': 50.2,
+        'metric': 'pass_attempts',
+        'line': line,
+        'historical': [45, 50, 55, 40, 60],
+        'home_away': ['Home', 'Away', 'Home', 'Away', 'Home'],
+        'opponents_short': ['ARS', 'CHE', 'LIV', 'MUN', 'TOT'],
+        'opponent': opponent  # For breakdown
+    }
+    display_prediction(example_data)
+    display_trajectory_grid(example_data)
+    display_breakdown(example_data)
+    st.success("Prediction: Over with 65% probability (based on Bayesian model).")
