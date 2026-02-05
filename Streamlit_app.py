@@ -16,15 +16,9 @@ import requests
 import soccerdata as sd
 import sqlite3
 import hashlib  # For password hashing
-import hashlib  # For caching key
 
-# Prompt for API key (first thing)
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = st.text_input("Enter your API-Sports Key:", type="password")
-    if st.session_state.api_key:
-        API_KEY = st.session_state.api_key
-    else:
-        st.stop()
+# API Key from secrets (no prompt)
+API_KEY = st.secrets.get("API_KEY", 'dOc229af0abe00c84153c104995ee960')  # Fallback if not set
 
 # SQLite for User Login & Predictions
 DB_FILE = "reversebot.db"
@@ -32,7 +26,6 @@ DB_FILE = "reversebot.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Users table with hashed passwords
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +33,6 @@ def init_db():
             password_hash TEXT
         )
     ''')
-    # Predictions table for history
     c.execute('''
         CREATE TABLE IF NOT EXISTS predictions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +57,7 @@ def init_db():
 
 init_db()
 
-# User Login/Sign Up/Reset/Logout
+# User Login/Sign Up/Reset
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_id = None
@@ -133,7 +125,10 @@ if not st.session_state.logged_in:
 
     st.stop()
 
-# Logout Button (add to sidebar or top)
+# Sidebar with Logout and Profile
+st.sidebar.title(f"Welcome, {st.session_state.user_username}")
+if st.sidebar.button("Profile"):
+    st.session_state.page = 'profile'
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.user_id = None
