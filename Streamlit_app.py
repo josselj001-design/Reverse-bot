@@ -133,10 +133,14 @@ league_to_id = {
 
 # Position Baselines
 position_baselines = {
-    'GK': {'saves': {'mean': 3.0, 'sd': 1.0}, 'shots_attempted': {'mean': 0.1, 'sd': 0.5}},
+    'Goalkeeper': {'saves': {'mean': 3.0, 'sd': 1.0}, 'shots_attempted': {'mean': 0.1, 'sd': 0.5}},
+    'Defender': {'passes_attempted': {'mean': 55.0, 'sd': 10.0}, 'shots_attempted': {'mean': 0.5, 'sd': 1.0}},
+    'Midfielder': {'passes_attempted': {'mean': 60.0, 'sd': 15.0}, 'shots_attempted': {'mean': 1.5, 'sd': 2.0}},
+    'Attacker': {'passes_attempted': {'mean': 30.0, 'sd': 10.0}, 'shots_attempted': {'mean': 3.0, 'sd': 3.0}},
     'CB': {'passes_attempted': {'mean': 55.0, 'sd': 10.0}, 'shots_attempted': {'mean': 0.5, 'sd': 1.0}},
     'CM': {'passes_attempted': {'mean': 60.0, 'sd': 15.0}, 'shots_attempted': {'mean': 1.5, 'sd': 2.0}},
-    'FWD': {'passes_attempted': {'mean': 30.0, 'sd': 10.0}, 'shots_attempted': {'mean': 3.0, 'sd': 3.0}}
+    'FWD': {'passes_attempted': {'mean': 30.0, 'sd': 10.0}, 'shots_attempted': {'mean': 3.0, 'sd': 3.0}},
+    'GK': {'saves': {'mean': 3.0, 'sd': 1.0}, 'shots_attempted': {'mean': 0.1, 'sd': 0.5}},
 }
 
 # Role Multipliers
@@ -496,6 +500,4 @@ if st.button("Submit", type="primary"):
         else:
             st.error("Data fetch failed. Check player/opponent names or API key.")
 st.markdown('</div>', unsafe_allow_html=True)
-```")
-
-line
+```, '
